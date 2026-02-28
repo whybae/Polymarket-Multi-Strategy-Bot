@@ -492,6 +492,10 @@ def place_brackets(executor: OrderExecutor, state: BotState, tick_size: float,
     """
     Cancel existing brackets then place fresh TP + SL GTC orders.
 
+   # Satış emirlerini göndermeden hemen önce bu yetkiyi almalısın
+   client.set_allowance(state.token_id)
+   time.sleep(2) # Borsanın onayı tanıması için kısa bir bekleme
+
     Before placing, optionally queries real balance to prevent "Not Enough
     Allowance". Uses the lower of state.total_shares vs actual wallet balance.
     """
@@ -880,4 +884,5 @@ def run(interval: Optional[str] = None):
 
 
 if __name__ == "__main__":
+
     run()
