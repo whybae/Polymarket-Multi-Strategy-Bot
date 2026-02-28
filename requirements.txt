@@ -1,23 +1,8 @@
-# Polymarket Trading Asset Bot — Dependencies
-
-# Polymarket CLOB client
 py-clob-client
-
-# Blockchain / Web3
-web3==6.14.0
-
-# Environment variables
+web3>=6.0.0
 python-dotenv
-
-# HTTP requests
 requests
-
-# Async HTTP (for concurrent market monitoring)
 aiohttp
-
-# Scheduling / timing
 APScheduler
-
-# Data handling
 pandas
 numpy
