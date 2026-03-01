@@ -1,46 +1,57 @@
 import os
 import logging
 import requests
-from py_builder_relayer_client.client import RelayClient
-from py_builder_signing_sdk import BuilderConfig, BuilderApiKeyCreds
+import time
+from web3 import Web3
+from eth_account import Account
+
+# Kütüphanelerin yüklenip yüklenmediğini kontrol ederek import et
+try:
+    from py_builder_relayer_client import RelayClient
+    from py_builder_signing_sdk import BuilderConfig, BuilderApiKeyCreds
+except ImportError:
+    print("HATA: Kütüphaneler bulunamadı. Lütfen requirements.txt dosyasına ekleyin.")
 
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] >>> %(message)s')
-log = logging.getLogger("SDK-Test")
+log = logging.getLogger("SDK-Fix")
 
 def run_sdk_test():
-    # 1. Credentials (Railway Variables)
-    creds = BuilderApiKeyCreds(
-        key=os.getenv("POLY_BUILDER_KEY"),
-        secret=os.getenv("POLY_BUILDER_SECRET"),
-        passphrase=os.getenv("POLY_BUILDER_PASSPHRASE")
-    )
-    
-    config = BuilderConfig(local_builder_creds=creds)
+    # 1. Credentials
+    k = os.getenv("POLY_BUILDER_KEY")
+    s = os.getenv("POLY_BUILDER_SECRET")
+    p = os.getenv("POLY_BUILDER_PASSPHRASE")
     pk = os.getenv("POLY_PRIVATE_KEY")
     pw = os.getenv("FUNDER_ADDRESS")
 
-    # 2. Client Setup (Dökümana %100 uygun)
-    # 137 = Polygon Mainnet
-    client = RelayClient("https://relayer-v2.polymarket.com", 137, pk, config)
+    if not all([k, s, p, pk, pw]):
+        log.error("Eksik değişkenler var! Lütfen Railway Variables sekmesini kontrol edin.")
+        return
 
-    log.info("--- SDK TABANLI OPERASYON BAŞLADI ---")
+    # 2. SDK Yapılandırması
+    creds = BuilderApiKeyCreds(key=k, secret=s, passphrase=p)
+    config = BuilderConfig(local_builder_creds=creds)
 
+    # 3. Client Başlatma (Polygon Mainnet: 137)
     try:
-        # 3. Pozisyon Bul
+        client = RelayClient("https://relayer-v2.polymarket.com", 137, pk, config)
+        log.info("--- SDK TABANLI OPERASYON BAŞLADI ---")
+
+        # 4. Pozisyon Bulma
         r = requests.get(f"https://data-api.polymarket.com/positions?user={pw}&limit=1")
-        cid = r.json()[0]['conditionId']
+        data_json = r.json()
+        if not data_json:
+            log.warning("Cüzdanda pozisyon bulunamadı.")
+            return
+            
+        cid = data_json[0]['conditionId']
         log.info(f"Hedef Condition: {cid}")
 
-        # 4. İşlemi Oluştur (Dökümandaki gibi)
-        # Buradaki 'execute' metodu dökümanda gösterildiği gibi her şeyi otomatik imzalar
-        # Hem EOA imzasını hem Builder L2 imzasını kütüphane halleder.
-        
-        # CTF Redeem Verisi
-        from web3 import Web3
+        # 5. Redeem Verisi Hazırlama
         USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
         CTF = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
         
-        data = Web3().eth.contract(address=CTF, abi=[{
+        w3 = Web3()
+        contract = w3.eth.contract(address=CTF, abi=[{
             "name": "redeemPositions", "type": "function",
             "inputs": [
                 {"name": "collateralToken", "type": "address"},
@@ -48,17 +59,24 @@ def run_sdk_test():
                 {"name": "conditionId", "type": "bytes32"},
                 {"name": "indexSets", "type": "uint256[]"}
             ], "outputs": []
-        }]).encode_abi("redeemPositions", [USDC, b"\x00"*32, bytes.fromhex(cid[2:].zfill(64)), [1, 2]])
+        }])
+        
+        calldata = contract.encode_abi("redeemPositions", [
+            Web3.to_checksum_address(USDC), 
+            b"\x00"*32, 
+            bytes.fromhex(cid[2:].zfill(64)), 
+            [1, 2]
+        ])
 
-        tx = {"to": CTF, "data": data, "value": "0"}
+        tx = {"to": CTF, "data": calldata, "value": "0"}
 
-        log.info("🚀 SDK üzerinden işlem gönderiliyor (Gasless)...")
+        log.info("🚀 SDK üzerinden işlem gönderiliyor...")
+        # SDK execute metodu dökümandaki gibi tüm imzalama işlerini yapar
         response = client.execute([tx], "Redeem Positions via SDK")
         
-        # Wait for transaction
-        log.info("İşlem gönderildi, onay bekleniyor...")
+        log.info("Bekleniyor...")
         result = response.wait()
-        log.info(f"✅ BAŞARILI! İşlem Hash: {result.get('transactionHash')}")
+        log.info(f"✅ BAŞARILI! Hash: {result.get('transactionHash')}")
 
     except Exception as e:
         log.error(f"❌ SDK HATASI: {e}")
