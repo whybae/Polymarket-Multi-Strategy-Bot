@@ -36,12 +36,13 @@ def run_diagnostic():
 
     log.info(f"✅ Tüm anahtarlar yüklendi. Adres: {keys['ADDR'][:10]}...")
     
-    # Polymarket V2 Kesin İmza Protokolü
+    # VARYASYON: Polymarket bazen PATH'in başına methodu koymaz veya endpoint farklıdır
+    # En güncel V2 standardına göre: timestamp + method + path + body
     timestamp = str(int(time.time()))
     method = "POST"
-    path = "/submit"
+    path = "/submit" # Eğer çalışmazsa bir sonraki adımda '/orders' deneyeceğiz
     
-    # Body'yi alfabetik sıralı ve boşluksuz JSON yapalım (Çok Önemli!)
+    # Body: Boşluksuz ve anahtarlar alfabetik (Strict JSON)
     payload = {
         "data": "0x",
         "from": keys['ADDR'],
@@ -52,22 +53,18 @@ def run_diagnostic():
         "to": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
         "type": "EOA"
     }
-    
-    # separators=(',', ':') JSON'daki tüm boşlukları siler
     body = json.dumps(payload, separators=(',', ':'), sort_keys=True)
     
-    # Mesaj birleştirme: TIMESTAMP + METHOD + PATH + BODY
+    # ÖNEMLİ: Bazı kütüphaneler POST'u büyük harf bekler, bazıları path sonuna '/' ister
     message = f"{timestamp}{method}{path}{body}"
-    
-    # HMAC SHA256
     sig = hmac.new(keys['SECRET'].encode(), message.encode(), hashlib.sha256).hexdigest()
 
-    # Header isimlerini Polymarket dökümanındaki tam halleriyle güncelleyelim
+    # Bu sefer 'POLY-BUILDER-' ön ekini geri getiriyoruz, çünkü 401 aldık
     headers = {
-        "POLY-API-KEY": keys['KEY'],
-        "POLY-SIGNATURE": sig,
-        "POLY-TIMESTAMP": timestamp,
-        "POLY-PASSPHRASE": keys['PASS'],
+        "POLY-BUILDER-API-KEY": keys['KEY'],
+        "POLY-BUILDER-SIGNATURE": sig,
+        "POLY-BUILDER-TIMESTAMP": timestamp,
+        "POLY-BUILDER-PASSPHRASE": keys['PASS'],
         "Content-Type": "application/json"
     }
 
