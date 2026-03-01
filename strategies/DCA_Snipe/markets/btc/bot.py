@@ -745,6 +745,9 @@ def run_window(market: dict, executor: OrderExecutor, state: BotState, interval:
                     executor.gtc_tracker.cancel_all(log)
                     real_bal = get_token_balance(client, state.token_id)
                     sell_shares = real_bal if real_bal is not None else state.total_shares
+                     # Borsa onayını (allowance) zorla alıyoruz ve indeksleme için 3 saniye bekliyoruz
+   client.set_allowance(state.token_id)
+   time.sleep(3)
                     resp = executor.place_sell_immediate(
                         token_id      = state.token_id,
                         total_shares  = sell_shares,
@@ -888,4 +891,5 @@ def run(interval: Optional[str] = None):
 if __name__ == "__main__":
 
     run()
+
 
