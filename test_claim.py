@@ -56,7 +56,7 @@ def run_diagnostic():
     body = json.dumps(payload, separators=(',', ':'), sort_keys=True)
     
     # MESAJ: timestamp + method + path + body (Arada boşluk yok!)
-    message = f"{timestamp}{method}{path}{body}"
+    message = f"{timestamp}{body}"    
     
     # HMAC-SHA256 (Secret anahtarın ile imzala)
     sig = hmac.new(keys['SECRET'].encode(), message.encode(), hashlib.sha256).hexdigest()
