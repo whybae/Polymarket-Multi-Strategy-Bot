@@ -374,109 +374,66 @@ def redeem_via_relayer(w3: Web3, condition_id: str, size: float,
 
 def redeem_via_safe(w3: Web3, condition_id: str, size: float, neg_risk: bool,
                     private_key: str, eoa_address: str, proxy_wallet: str) -> bool:
-    """
-    Executes redeemPositions through the proxy wallet's Gnosis Safe contract.
-
-    Flow:
-      1. Encode CTF/NegRisk redeemPositions calldata
-      2. Call Safe.getTransactionHash(...) to obtain the EIP-712 hash
-      3. Sign the hash with the EOA (eth_sign, v=31/32 for Gnosis Safe)
-      4. Call Safe.execTransaction(...) on-chain from the EOA
-    """
     try:
-        # 1. Redemption calldata
+        # 1. Redemption calldata hazırlığı
         if neg_risk:
             data_hex = encode_neg_risk_calldata(w3, condition_id, size)
-            to       = NEG_RISK_ADDRESS
+            to = NEG_RISK_ADDRESS
         else:
             data_hex = encode_redeem_calldata(w3, condition_id)
-            to       = CTF_ADDRESS
+            to = CTF_ADDRESS
 
         data_bytes = bytes.fromhex(data_hex.removeprefix("0x"))
-        to_cs      = Web3.to_checksum_address(to)
+        to_cs = Web3.to_checksum_address(to)
 
-        # 2. Safe contract instance
+        # 2. Safe kontrat instance
         safe = w3.eth.contract(
             address=Web3.to_checksum_address(proxy_wallet),
             abi=SAFE_ABI,
         )
 
-        # 3. Current Safe nonce
-        safe_nonce = safe.functions.nonce().call()
-        log.info(f"    Safe nonce : {safe_nonce}")
+        # 3. KRİTİK DÜZELTME: Nonce hatasını aşmak için try-except
+        try:
+            safe_nonce = safe.functions.nonce().call()
+            log.info(f"    Safe nonce found: {safe_nonce}")
+        except Exception:
+            # Eğer proxy cüzdan nonce vermezse, ağdaki genel sayacı kullan
+            safe_nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(eoa_address))
+            log.warning(f"    Safe nonce failed, using EOA nonce: {safe_nonce}")
 
-        # 4. Safe transaction hash (EIP-712 on-chain)
-        safe_tx_hash: bytes = safe.functions.getTransactionHash(
-            to_cs,          # to
-            0,              # value
-            data_bytes,     # data
-            0,              # operation  (0 = CALL)
-            0,              # safeTxGas
-            0,              # baseGas
-            0,              # gasPrice
-            ADDR_ZERO,      # gasToken
-            ADDR_ZERO,      # refundReceiver
-            safe_nonce,     # _nonce
+        # 4. Transaction Hash (EIP-712)
+        safe_tx_hash = safe.functions.getTransactionHash(
+            to_cs, 0, data_bytes, 0, 0, 0, 0, ADDR_ZERO, ADDR_ZERO, safe_nonce
         ).call()
 
-        log.info(f"    Safe tx hash: 0x{bytes(safe_tx_hash).hex()}")
-
-        # 5. eth_sign over the Safe tx hash
-        #    Gnosis Safe accepts v=31/32 for eth_sign (v_raw + 4)
+        # 5. İmzalama (v=31/32 Gnosis Safe kuralı)
         signable = encode_defunct(primitive=bytes(safe_tx_hash))
-        signed   = Account.from_key(private_key).sign_message(signable)
-        v        = signed.v + 4   # 27→31 or 28→32 (eth_sign type for Gnosis Safe)
-        packed_sig = (
-            signed.r.to_bytes(32, "big") +
-            signed.s.to_bytes(32, "big") +
-            bytes([v])
-        )
-        log.info(f"    Signature  : 0x{packed_sig.hex()[:22]}... (v={v})")
+        signed = Account.from_key(private_key).sign_message(signable)
+        v = signed.v + 4
+        packed_sig = signed.r.to_bytes(32, "big") + signed.s.to_bytes(32, "big") + bytes([v])
 
-        # 6. Send execTransaction from the EOA
-        gas_price          = w3.eth.gas_price
-        adjusted_gas_price = int(gas_price * 1.20)
-        log.info(f"    Gas price  : {w3.from_wei(adjusted_gas_price, 'gwei'):.2f} Gwei")
-
-        nonce = w3.eth.get_transaction_count(eoa_address)
+        # 6. İşlemi Gönder (EOA'dan Proxy adına)
+        gas_price = int(w3.eth.gas_price * 1.25) # Gazı %25 artırıyoruz ki takılmasın
+        
         tx = safe.functions.execTransaction(
-            to_cs,          # to
-            0,              # value
-            data_bytes,     # data
-            0,              # operation
-            0,              # safeTxGas
-            0,              # baseGas
-            0,              # gasPrice
-            ADDR_ZERO,      # gasToken
-            ADDR_ZERO,      # refundReceiver
-            packed_sig,     # signatures
+            to_cs, 0, data_bytes, 0, 0, 0, 0, ADDR_ZERO, ADDR_ZERO, packed_sig
         ).build_transaction({
-            "from"    : eoa_address,
-            "gas"     : 500_000,
-            "gasPrice": adjusted_gas_price,
-            "nonce"   : nonce,
-            "chainId" : CHAIN_ID,
+            "from": eoa_address,
+            "gas": 600_000,
+            "gasPrice": gas_price,
+            "nonce": w3.eth.get_transaction_count(eoa_address),
+            "chainId": CHAIN_ID,
         })
 
-        account    = Account.from_key(private_key)
-        signed_tx  = account.sign_transaction(tx)
-        raw_tx     = getattr(signed_tx, "rawTransaction", None) or signed_tx.raw_transaction
-        tx_hash    = w3.eth.send_raw_transaction(raw_tx)
-
-        log.info(f"    Submitted : {tx_hash.hex()}")
-        log.info(f"    Waiting for confirmation...")
-
+        signed_tx = Account.from_key(private_key).sign_transaction(tx)
+        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+        log.info(f"    ✅ Submitted Auto-Claim: {tx_hash.hex()}")
+        
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-
-        if receipt["status"] == 1:
-            log.info(f"    ✅ Success! Gas used: {receipt['gasUsed']}")
-            return True
-        else:
-            log.error("    ❌ execTransaction reverted")
-            return False
+        return receipt["status"] == 1
 
     except Exception as exc:
-        log.error(f"    ❌ Safe execution error: {exc}", exc_info=True)
+        log.error(f"    ❌ Safe Auto-Claim Error: {exc}")
         return False
 
 
@@ -947,6 +904,7 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
 
