@@ -60,7 +60,9 @@ def submit_to_relayer(eoa_address, proxy_wallet, to, data_hex, nonce, signature)
     api_secret = _cfg("POLY_BUILDER_SECRET")
     api_pass = _cfg("POLY_BUILDER_PASSPHRASE")
     
-    timestamp = str(int(time.time()))
+    # 401 Hatasını Çözen Zaman Ayarı: 
+    # Sunucu saat farkını tolere etmek için 1 saniye ileri alıyoruz
+    timestamp = str(int(time.time() + 1))
     method = "POST"
     path = "/submit"
     
@@ -75,10 +77,16 @@ def submit_to_relayer(eoa_address, proxy_wallet, to, data_hex, nonce, signature)
         "type": "EOA"
     }
     
+    # Body: Kesinlikle boşluksuz ve sıralı
     body_str = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+    
+    # MESAJ DİZİLİMİ: Bazı Relayer'lar PATH sonuna '/' ister veya istemez.
+    # En standart çalışan format: timestamp + method + path + body
     message = f"{timestamp}{method}{path}{body_str}"
+    
     sig_l2 = hmac.new(api_secret.encode(), message.encode(), hashlib.sha256).hexdigest()
 
+    # HEADER İSİMLERİ: Kesinlikle Tire (-) kullanılmalı
     headers = {
         "POLY-API-KEY": api_key,
         "POLY-SIGNATURE": sig_l2,
@@ -86,6 +94,8 @@ def submit_to_relayer(eoa_address, proxy_wallet, to, data_hex, nonce, signature)
         "POLY-PASSPHRASE": api_pass,
         "Content-Type": "application/json"
     }
+
+    log.info(f"    🚀 Relayer-V2 Deneniyor... (TS: {timestamp})")
 
     try:
         resp = requests.post(RELAYER_URL, json=payload, headers=headers, timeout=30)
@@ -98,11 +108,11 @@ def submit_to_relayer(eoa_address, proxy_wallet, to, data_hex, nonce, signature)
             return result
         else:
             log.error(f"    ❌ RED: {resp.status_code} - {resp.text}")
+            # Eğer hala 401 geliyorsa, zamanı 1 saniye geri çekip tekrar deneme mekanizması eklenebilir
             return None
     except Exception as e:
         log.error(f"    ❌ Hata: {e}")
         return None
-
 def run():
     pk = _cfg("POLY_PRIVATE_KEY")
     pw = _cfg("FUNDER_ADDRESS")
@@ -142,3 +152,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+
