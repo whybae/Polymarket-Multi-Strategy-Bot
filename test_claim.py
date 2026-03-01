@@ -1,88 +1,73 @@
-import os
-import logging
-import requests
-import time
+import hmac, hashlib, time, requests, json, os, logging
 from web3 import Web3
+from eth_account import Account
+from eth_account.messages import encode_defunct
 
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] >>> %(message)s')
-log = logging.getLogger("SDK-Explorer")
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+log = logging.getLogger("ManualRelayer")
 
-# --- AKILLI KEŞİF BLOĞU ---
-def get_sdk_components():
-    # 1. Adım: Ana modülleri içeri aktar
-    try:
-        import py_builder_relayer_client as pbrc
-        import py_builder_signing_sdk as pbss
-        log.info("Kütüphaneler sistemde bulundu, sınıflar aranıyor...")
-    except ImportError:
-        return None, None, None
+def run_manual_gasless():
+    # 1. Variables
+    k = os.environ.get("POLY_BUILDER_KEY", "").strip()
+    s = os.environ.get("POLY_BUILDER_SECRET", "").strip()
+    p = os.environ.get("POLY_BUILDER_PASSPHRASE", "").strip()
+    pk = os.environ.get("POLY_PRIVATE_KEY", "").strip()
+    pw = os.environ.get("FUNDER_ADDRESS", "").strip()
 
-    # 2. Adım: BuilderConfig ve BuilderApiKeyCreds sınıflarını kütüphane içinde tara
-    # Kütüphane versiyon farklarına göre sınıfları bulur
-    def find_class(module, class_name):
-        # Doğrudan ana modülde mi?
-        if hasattr(module, class_name):
-            return getattr(module, class_name)
-        # Alt modüllerde mi? (Örn: pbss.BuilderConfig veya pbss.config.BuilderConfig)
-        for attr_name in dir(module):
-            attr = getattr(module, attr_name)
-            if hasattr(attr, class_name):
-                return getattr(attr, class_name)
-        return None
-
-    b_config = find_class(pbss, "BuilderConfig")
-    b_creds = find_class(pbss, "BuilderApiKeyCreds")
-    r_client = find_class(pbrc, "RelayClient")
-
-    return b_config, b_creds, r_client
-
-BuilderConfig, BuilderApiKeyCreds, RelayClient = get_sdk_components()
-
-def run_final_push():
-    if not all([BuilderConfig, BuilderApiKeyCreds, RelayClient]):
-        log.error("HATA: Kütüphane yüklü ama sınıflar (BuilderConfig vb.) bulunamadı.")
-        # Debug: Kütüphane içeriğini logla (neyin yanlış olduğunu görmek için)
-        import py_builder_signing_sdk
-        log.info(f"Kütüphane İçeriği: {dir(py_builder_signing_sdk)}")
-        return
-
-    # DEĞİŞKENLER
-    k, s, p = os.getenv("POLY_BUILDER_KEY"), os.getenv("POLY_BUILDER_SECRET"), os.getenv("POLY_BUILDER_PASSPHRASE")
-    pk, pw = os.getenv("POLY_PRIVATE_KEY"), os.getenv("FUNDER_ADDRESS")
+    log.info("--- DÖKÜMAN UYUMLU MANUEL GASLESS OPERASYONU ---")
 
     try:
-        # SDK BAŞLATMA
-        creds = BuilderApiKeyCreds(key=k, secret=s, passphrase=p)
-        config = BuilderConfig(local_builder_creds=creds)
-        client = RelayClient("https://relayer-v2.polymarket.com", 137, pk, config)
+        # 2. Pozisyonu al (Dinamik)
+        r_pos = requests.get(f"https://data-api.polymarket.com/positions?user={pw}&limit=1")
+        cid = r_pos.json()[0]['conditionId']
         
-        log.info("🚀 SDK Başarıyla Bağlandı!")
-
-        # POZİSYON BULMA
-        r = requests.get(f"https://data-api.polymarket.com/positions?user={pw}&limit=1")
-        if not r.json():
-            log.info("Çekilecek pozisyon kalmadı.")
-            return
-        cid = r.json()[0]['conditionId']
-
-        # REDEEM DATA
+        # 3. Payload Hazırlığı (Dökümandaki gibi)
         w3 = Web3()
-        contract_addr = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
-        abi = [{"name":"redeemPositions","type":"function","inputs":[{"name":"collateralToken","type":"address"},{"name":"parentCollectionId","type":"bytes32"},{"name":"conditionId","type":"bytes32"},{"name":"indexSets","type":"uint256[]"}],"outputs":[],"stateMutability":"nonpayable"}]
-        data = w3.eth.contract(address=contract_addr, abi=abi).encode_abi("redeemPositions", [
-            "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", b"\x00"*32, bytes.fromhex(cid[2:].zfill(64)), [1, 2]
-        ])
-
-        # EXECUTE
-        log.info(f"Redeeming: {cid}")
-        response = client.execute([{"to": contract_addr, "data": data, "value": "0"}], "SDK Claim")
+        # Redeem Calldata
+        data_hex = w3.eth.contract(address=Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"), abi=[{"name":"redeemPositions","type":"function","inputs":[{"name":"collateralToken","type":"address"},{"name":"parentCollectionId","type":"bytes32"},{"name":"conditionId","type":"bytes32"},{"name":"indexSets","type":"uint256[]"}],"outputs":[],"stateMutability":"nonpayable"}]).encode_abi("redeemPositions", [Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"), b"\x00" * 32, bytes.fromhex(cid[2:].zfill(64)), [1, 2]])
         
-        log.info("İşlem Relayer'da, onay bekleniyor...")
-        result = response.wait()
-        log.info(f"✅ İŞLEM BAŞARILI: {result.get('transactionHash')}")
+        # EOA Signature
+        eoa_sig = Account.from_key(pk).sign_message(encode_defunct(primitive=Web3.keccak(bytes.fromhex(data_hex.removeprefix("0x"))))).signature.hex()
+
+        payload = {
+            "data": data_hex,
+            "from": Web3.to_checksum_address(Account.from_key(pk).address),
+            "metadata": "",
+            "nonce": int(time.time() * 1000), # Döküman: "increment for each request"
+            "proxyWallet": Web3.to_checksum_address(pw),
+            "signature": eoa_sig if eoa_sig.startswith("0x") else "0x"+eoa_sig,
+            "to": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
+            "type": "EOA"
+        }
+        
+        # Döküman: "Separators ensure no whitespace"
+        body_str = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+        
+        # 4. HMAC SIGNATURE (DÖKÜMANDAKİ FORMÜL)
+        timestamp = str(int(time.time()))
+        method = "POST"
+        path = "/submit"
+        
+        # Formül: timestamp + method + path + body
+        sig_message = f"{timestamp}{method}{path}{body_str}"
+        signature = hmac.new(s.encode(), sig_message.encode(), hashlib.sha256).hexdigest()
+
+        # 5. Gönderim
+        headers = {
+            "POLY-API-KEY": k,
+            "POLY-SIGNATURE": signature,
+            "POLY-TIMESTAMP": timestamp,
+            "POLY-PASSPHRASE": p,
+            "Content-Type": "application/json"
+        }
+
+        log.info(f"Redeeming: {cid}")
+        resp = requests.post("https://relayer-v2.polymarket.com/submit", data=body_str, headers=headers)
+        
+        log.info(f"SONUÇ: {resp.status_code} - {resp.text}")
 
     except Exception as e:
         log.error(f"Hata: {e}")
 
 if __name__ == "__main__":
-    run_final_push()
+    run_manual_gasless()
