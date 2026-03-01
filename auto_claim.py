@@ -308,10 +308,49 @@ def sign_calldata(private_key: str, data_hex: str) -> str:
     sig_hex    = signed.signature.hex()
     return sig_hex if sig_hex.startswith("0x") else "0x" + sig_hex
 
+# ... import kısımları (üstte) ...
 
-def submit_to_relayer(eoa_address: str, proxy_wallet: str, to: str,
-                      data_hex: str, nonce: int, signature: str) -> dict | None:
-    """POST https://relayer-v2.polymarket.com/submit  (type=EOA, signatureType=0)"""
+# 1. BURAYI BUL VE DEĞİŞTİR:
+def submit_to_relayer(eoa_address, proxy_wallet, to, data_hex, nonce, signature):
+    # Railway'den Builder anahtarlarını çekiyoruz
+    api_key = os.environ.get("POLY_BUILDER_KEY", "").strip()
+    api_secret = os.environ.get("POLY_BUILDER_SECRET", "").strip()
+    api_pass = os.environ.get("POLY_BUILDER_PASSPHRASE", "").strip()
+    
+    timestamp = str(int(time.time()))
+    method = "POST"
+    path = "/submit"
+    
+    payload = {
+        "data": data_hex,
+        "from": Web3.to_checksum_address(eoa_address),
+        "metadata": "",
+        "nonce": str(nonce),
+        "proxyWallet": Web3.to_checksum_address(proxy_wallet),
+        "signature": signature,
+        "to": Web3.to_checksum_address(to),
+        "type": "EOA"
+    }
+    
+    # İmza mesajı (Az önce 405 aldığımız çalışan format)
+    body = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+    message = f"{timestamp}{method}{path}{body}"
+    
+    # HMAC-SHA256
+    sig = hmac.new(api_secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+    headers = {
+        "POLY-API-KEY": api_key,
+        "POLY-SIGNATURE": sig,
+        "POLY-TIMESTAMP": timestamp,
+        "POLY-PASSPHRASE": api_pass,
+        "Content-Type": "application/json"
+    }
+
+    url = "https://relayer-v2.polymarket.com/submit"
+    return requests.post(url, json=payload, headers=headers, timeout=30)
+
+# ... dosyanın geri kalanı (main kısımları vs.) ...
     payload = {
         "data"       : data_hex,
         "from"       : Web3.to_checksum_address(eoa_address),
@@ -958,5 +997,6 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
