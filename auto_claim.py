@@ -47,7 +47,7 @@ CONTRACTS (Polygon mainnet):
   CLAIM_METHOD            safe | relayer | onchain (default: relayer)
   CHECK_REAL_TIME         true | false (default: false)
 """
-
+import os
 import logging
 import threading
 import time
@@ -62,8 +62,8 @@ _CFG = dotenv_values(_ROOT / ".env")
 
 
 def _cfg(key: str, default: str = "") -> str:
-    """Read a variable from .env."""
-    return _CFG.get(key, default).strip()
+    """Önce Railway sistemine (os.getenv), sonra .env dosyasına bak."""
+    return os.getenv(key) or _CFG.get(key, default).strip()
 
 
 logging.basicConfig(
@@ -947,3 +947,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+
