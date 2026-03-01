@@ -512,10 +512,10 @@ def get_redeemable_positions(wallet: str) -> tuple[list, list]:
     all_positions = fetch_all_positions(wallet)
 
     redeemable = [
-        p for p in all_positions
-        if (float(p.get("curPrice", 0.5)) >= RESOLVED_HIGH or
-            float(p.get("curPrice", 0.5)) <= RESOLVED_LOW)
-        and p.get("redeemable") is True
+    p for p in positions
+    if (float(p.get("curPrice", 0.5)) >= 0.98) # Sadece kazandığın (1$ olan) pazarla ilgilen
+    and p.get("redeemable") is True
+    and float(p.get("currentValue", 0)) > 0.1 # Değeri 0 olanları asla listeye alma
     ]
 
     active = [
@@ -947,4 +947,5 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
