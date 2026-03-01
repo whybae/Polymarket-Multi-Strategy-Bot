@@ -75,7 +75,7 @@ log = logging.getLogger("AutoClaim")
 
 # ── Config (read from .env) ────────────────────────────────────────────────────
 CHECK_INTERVAL            = int(_cfg("CLAIM_CHECK_INTERVAL", "60"))
-CLAIM_METHOD              = _cfg("CLAIM_METHOD", "safe").lower()
+CLAIM_METHOD              = _cfg("CLAIM_METHOD", "relayer").lower()
 CHECK_REAL_TIME           = _cfg("CHECK_REAL_TIME", "false").lower() in ("true", "1", "yes")
 POSITION_REFRESH_INTERVAL = 120   # seconds between subscription refreshes in WS mode
 
@@ -905,6 +905,7 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
 
