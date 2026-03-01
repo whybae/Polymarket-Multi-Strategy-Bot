@@ -1,69 +1,67 @@
-import hmac, hashlib, time, requests, json, os, logging
-from web3 import Web3
-from eth_account import Account
-from eth_account.messages import encode_defunct
+import os
+import logging
+import requests
+from py_builder_relayer_client.client import RelayClient
+from py_builder_signing_sdk import BuilderConfig, BuilderApiKeyCreds
 
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-log = logging.getLogger("PolymarketDocs")
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] >>> %(message)s')
+log = logging.getLogger("SDK-Test")
 
-def run_doc_compliant_test():
-    # Variables
-    k = os.environ.get("POLY_BUILDER_KEY", "").strip()
-    s = os.environ.get("POLY_BUILDER_SECRET", "").strip()
-    p = os.environ.get("POLY_BUILDER_PASSPHRASE", "").strip()
-    pk = os.environ.get("POLY_PRIVATE_KEY", "").strip()
-    pw = os.environ.get("FUNDER_ADDRESS", "").strip()
+def run_sdk_test():
+    # 1. Credentials (Railway Variables)
+    creds = BuilderApiKeyCreds(
+        key=os.getenv("POLY_BUILDER_KEY"),
+        secret=os.getenv("POLY_BUILDER_SECRET"),
+        passphrase=os.getenv("POLY_BUILDER_PASSPHRASE")
+    )
+    
+    config = BuilderConfig(local_builder_creds=creds)
+    pk = os.getenv("POLY_PRIVATE_KEY")
+    pw = os.getenv("FUNDER_ADDRESS")
+
+    # 2. Client Setup (Dökümana %100 uygun)
+    # 137 = Polygon Mainnet
+    client = RelayClient("https://relayer-v2.polymarket.com", 137, pk, config)
+
+    log.info("--- SDK TABANLI OPERASYON BAŞLADI ---")
 
     try:
-        # 1. Pozisyonu al
-        r_pos = requests.get(f"https://data-api.polymarket.com/positions?user={pw}&limit=1")
-        cid = r_pos.json()[0]['conditionId']
-        
-        # 2. Calldata (Dökümandaki yapıya uygun)
-        w3 = Web3()
-        contract = w3.eth.contract(address=Web3.to_checksum_address("0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"), abi=[{"name":"redeemPositions","type":"function","inputs":[{"name":"collateralToken","type":"address"},{"name":"parentCollectionId","type":"bytes32"},{"name":"conditionId","type":"bytes32"},{"name":"indexSets","type":"uint256[]"}],"outputs":[],"stateMutability":"nonpayable"}])
-        data_hex = contract.encode_abi("redeemPositions", args=[Web3.to_checksum_address("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"), b"\x00" * 32, bytes.fromhex(cid[2:].zfill(64)), [1, 2]])
+        # 3. Pozisyon Bul
+        r = requests.get(f"https://data-api.polymarket.com/positions?user={pw}&limit=1")
+        cid = r.json()[0]['conditionId']
+        log.info(f"Hedef Condition: {cid}")
 
-        # 3. EOA İmzası
-        msg_hash = Web3.keccak(bytes.fromhex(data_hex.removeprefix("0x")))
-        eoa_sig = Account.from_key(pk).sign_message(encode_defunct(primitive=msg_hash)).signature.hex()
-        if not eoa_sig.startswith("0x"): eoa_sig = "0x" + eoa_sig
-
-        # 4. REQUEST BODY (Döküman: "nonce should be a number")
-        payload = {
-            "data": data_hex,
-            "from": Web3.to_checksum_address(Account.from_key(pk).address),
-            "metadata": "",
-            "nonce": int(time.time()), # Dökümana uygun integer nonce
-            "proxyWallet": Web3.to_checksum_address(pw),
-            "signature": eoa_sig,
-            "to": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
-            "type": "EOA"
-        }
+        # 4. İşlemi Oluştur (Dökümandaki gibi)
+        # Buradaki 'execute' metodu dökümanda gösterildiği gibi her şeyi otomatik imzalar
+        # Hem EOA imzasını hem Builder L2 imzasını kütüphane halleder.
         
-        # Döküman: "Strict JSON, no spaces"
-        body_str = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+        # CTF Redeem Verisi
+        from web3 import Web3
+        USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+        CTF = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
         
-        # 5. AUTH SIGNATURE (Döküman: timestamp + method + path + body)
-        timestamp = str(int(time.time()))
-        message = f"{timestamp}POST/submit{body_str}"
-        sig_l2 = hmac.new(s.encode(), message.encode(), hashlib.sha256).hexdigest()
+        data = Web3().eth.contract(address=CTF, abi=[{
+            "name": "redeemPositions", "type": "function",
+            "inputs": [
+                {"name": "collateralToken", "type": "address"},
+                {"name": "parentCollectionId", "type": "bytes32"},
+                {"name": "conditionId", "type": "bytes32"},
+                {"name": "indexSets", "type": "uint256[]"}
+            ], "outputs": []
+        }]).encode_abi("redeemPositions", [USDC, b"\x00"*32, bytes.fromhex(cid[2:].zfill(64)), [1, 2]])
 
-        headers = {
-            "POLY-API-KEY": k,
-            "POLY-SIGNATURE": sig_l2,
-            "POLY-TIMESTAMP": timestamp,
-            "POLY-PASSPHRASE": p,
-            "Content-Type": "application/json"
-        }
+        tx = {"to": CTF, "data": data, "value": "0"}
 
-        log.info(f"Döküman uyumlu istek gönderiliyor... (Nonce: {payload['nonce']})")
-        resp = requests.post("https://relayer-v2.polymarket.com/submit", data=body_str, headers=headers)
+        log.info("🚀 SDK üzerinden işlem gönderiliyor (Gasless)...")
+        response = client.execute([tx], "Redeem Positions via SDK")
         
-        log.info(f"SONUÇ: {resp.status_code} - {resp.text}")
+        # Wait for transaction
+        log.info("İşlem gönderildi, onay bekleniyor...")
+        result = response.wait()
+        log.info(f"✅ BAŞARILI! İşlem Hash: {result.get('transactionHash')}")
 
     except Exception as e:
-        log.error(f"Hata: {e}")
+        log.error(f"❌ SDK HATASI: {e}")
 
 if __name__ == "__main__":
-    run_doc_compliant_test()
+    run_sdk_test()
