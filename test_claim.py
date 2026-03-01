@@ -35,8 +35,10 @@ def run_diagnostic():
         return
 
     log.info(f"✅ Tüm anahtarlar yüklendi. Adres: {keys['ADDR'][:10]}...")
-    # VARYASYON: Sadece Timestamp ve Body (Method/Path olmadan)
+    # VARYASYON: Strict Case and Path Inclusion
     timestamp = str(int(time.time()))
+    method = "POST"
+    path = "/submit"
     
     payload = {
         "data": "0x",
@@ -49,21 +51,21 @@ def run_diagnostic():
         "type": "EOA"
     }
     
-    # Body: Boşluksuz ve anahtarlar alfabetik (Strict JSON)
-    body = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+    # Body'yi bir değişkene alıp hem imzada hem de istekte AYNI stringi kullanmak çok kritiktir
+    body_str = json.dumps(payload, separators=(',', ':'), sort_keys=True)
     
-    # Çoğu başarılı Builder implementasyonu sadece bunu kullanır:
-    message = f"{timestamp}{body}"
+    # MESAJ: En standart V2 dizilimi
+    message = f"{timestamp}{method}{path}{body_str}"
     
     sig = hmac.new(keys['SECRET'].encode(), message.encode(), hashlib.sha256).hexdigest()
 
-    # Bazı sunucular POLY-API-KEY yerine POLY-BUILDER-API-KEY bekler.
-    # Bu sefer header isimlerini Polymarket'in "L2 Signature" dökümanındaki gibi yapıyoruz:
+    # Bazı sunucular tire yerine alt çizgi (_) ister, Polymarket V2 genelde TİRE (-) ister.
+    # Bu sefer BUILDER takısını tekrar ekliyoruz çünkü dökümanda öyle geçer.
     headers = {
-        "POLY-API-KEY": keys['KEY'],
-        "POLY-SIGNATURE": sig,
-        "POLY-TIMESTAMP": timestamp,
-        "POLY-PASSPHRASE": keys['PASS'],
+        "POLY_BUILDER_API_KEY": keys['KEY'],
+        "POLY_BUILDER_SIGNATURE": sig,
+        "POLY_BUILDER_TIMESTAMP": timestamp,
+        "POLY_BUILDER_PASSPHRASE": keys['PASS'],
         "Content-Type": "application/json"
     }
 
