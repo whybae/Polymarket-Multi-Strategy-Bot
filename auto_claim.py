@@ -865,7 +865,7 @@ def run():
     method_label = {
         "safe"   : "GNOSIS SAFE (execTransaction)",
         "onchain": "ON-CHAIN (direct tx)",
-        "relayer": "RELAYER (signatureType=0)",
+        "relayer": "RELAYER (signatureType=1)",
     }.get(CLAIM_METHOD, CLAIM_METHOD)
 
     mode_label = (
@@ -905,6 +905,7 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
 
