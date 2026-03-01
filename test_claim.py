@@ -36,23 +36,38 @@ def run_diagnostic():
 
     log.info(f"✅ Tüm anahtarlar yüklendi. Adres: {keys['ADDR'][:10]}...")
     
-    # Test İsteği Hazırla
+    # Polymarket V2 Kesin İmza Protokolü
     timestamp = str(int(time.time()))
+    method = "POST"
+    path = "/submit"
+    
+    # Body'yi alfabetik sıralı ve boşluksuz JSON yapalım (Çok Önemli!)
     payload = {
-        "data": "0x", "from": keys['ADDR'], "metadata": "", "nonce": "0",
-        "proxyWallet": keys['PROXY'], "signature": "0x", 
-        "to": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045", "type": "EOA"
+        "data": "0x",
+        "from": keys['ADDR'],
+        "metadata": "",
+        "nonce": "0",
+        "proxyWallet": keys['PROXY'],
+        "signature": "0x",
+        "to": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
+        "type": "EOA"
     }
     
-    body = json.dumps(payload, separators=(',', ':'))
-    message = f"{timestamp}POST/submit{body}"
+    # separators=(',', ':') JSON'daki tüm boşlukları siler
+    body = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+    
+    # Mesaj birleştirme: TIMESTAMP + METHOD + PATH + BODY
+    message = f"{timestamp}{method}{path}{body}"
+    
+    # HMAC SHA256
     sig = hmac.new(keys['SECRET'].encode(), message.encode(), hashlib.sha256).hexdigest()
 
+    # Header isimlerini Polymarket dökümanındaki tam halleriyle güncelleyelim
     headers = {
-        "POLY-BUILDER-API-KEY": keys['KEY'],
-        "POLY-BUILDER-SIGNATURE": sig,
-        "POLY-BUILDER-TIMESTAMP": timestamp,
-        "POLY-BUILDER-PASSPHRASE": keys['PASS'],
+        "POLY-API-KEY": keys['KEY'],
+        "POLY-SIGNATURE": sig,
+        "POLY-TIMESTAMP": timestamp,
+        "POLY-PASSPHRASE": keys['PASS'],
         "Content-Type": "application/json"
     }
 
