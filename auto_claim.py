@@ -287,7 +287,7 @@ def encode_neg_risk_calldata(w3: Web3, condition_id: str, size_usdc: float) -> s
 
 def sign_calldata(private_key: str, data_hex: str) -> str:
     """
-    signatureType=0: signs keccak256(calldata) via eth_sign (personal_sign prefix).
+    signatureType=1: signs keccak256(calldata) via eth_sign (personal_sign prefix).
     "\\x19Ethereum Signed Message:\\n32" + keccak256(calldata)
     """
     data_bytes = bytes.fromhex(data_hex.removeprefix("0x"))
@@ -905,6 +905,7 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
 
