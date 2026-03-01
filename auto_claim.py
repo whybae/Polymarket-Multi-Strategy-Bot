@@ -47,7 +47,7 @@ CONTRACTS (Polygon mainnet):
   CLAIM_METHOD            safe | relayer | onchain (default: relayer)
   CHECK_REAL_TIME         true | false (default: false)
 """
-
+import os
 import logging
 import threading
 import time
@@ -947,3 +947,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+
