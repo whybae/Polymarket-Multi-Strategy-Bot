@@ -1,4 +1,6 @@
 py-clob-client
+py-builder-relayer-client
+py-builder-signing-sdk
 web3>=6.0.0
 python-dotenv
 requests
