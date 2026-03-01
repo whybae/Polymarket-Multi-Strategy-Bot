@@ -7,7 +7,7 @@ Reads its configuration from .env (the same file used by the trading bots).
 Supports two redemption methods (configurable with CLAIM_METHOD in .env):
 
   relayer  → Sends meta-transactions to Polymarket's official Relayer.
-  (default)  signatureType=0 (EOA eth_sign). Independent of the SIGNATURE_TYPE
+  (default)  signatureType=1 (EOA eth_sign). Independent of the SIGNATURE_TYPE
                used by the trading bots.
 
   onchain  → Sends transactions directly on-chain from the EOA.
@@ -905,6 +905,7 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
 
