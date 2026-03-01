@@ -495,8 +495,7 @@ def place_brackets(executor: OrderExecutor, state: BotState, tick_size: float,
    # place_brackets fonksiyonunun hemen altına ekle
    if client is not None and state.token_id:
     log.info(f"  [allowance] Otomatik onay alınıyor: {state.token_id[:12]}...")
-    client.set_allowance(state.token_id)
-    time.sleep(2) # Onayın işlenmesi için kısa bir bekleme
+    
 
     Before placing, optionally queries real balance to prevent "Not Enough
     Allowance". Uses the lower of state.total_shares vs actual wallet balance.
@@ -888,6 +887,7 @@ def run(interval: Optional[str] = None):
 if __name__ == "__main__":
 
     run()
+
 
 
 
