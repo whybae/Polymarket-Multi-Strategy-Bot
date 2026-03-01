@@ -199,67 +199,6 @@ def is_neg_risk(position: dict) -> bool:
     return any(position.get(k, False) for k in ("negRisk", "negativeRisk", "neg_risk"))
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  METHOD A — DIRECT ON-CHAIN  (matches TypeScript reference)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def redeem_onchain(w3: Web3, condition_id: str, account) -> bool:
-    """
-    Build, sign, and broadcast redeemPositions directly on Polygon.
-    msg.sender = account.address
-
-    ⚠️  This only redeems CTF tokens held BY account.address.
-       Use CLAIM_METHOD=relayer if tokens live in a separate proxy wallet.
-    """
-    try:
-        cid_bytes = parse_condition_id(condition_id)
-
-        ctf = w3.eth.contract(
-            address=Web3.to_checksum_address(CTF_ADDRESS),
-            abi=CTF_ABI,
-        )
-
-        # Gas price + 20% buffer
-        gas_price          = w3.eth.gas_price
-        adjusted_gas_price = int(gas_price * 1.20)
-        log.info(f"    Gas price : {w3.from_wei(adjusted_gas_price, 'gwei'):.2f} Gwei")
-        log.info(f"    Condition : 0x{cid_bytes.hex()}")
-        log.info(f"    IndexSets : [1, 2]")
-
-        nonce = w3.eth.get_transaction_count(account.address)
-        tx = ctf.functions.redeemPositions(
-            Web3.to_checksum_address(USDC_ADDRESS),
-            b"\x00" * 32,   # parentCollectionId = bytes32(0)
-            cid_bytes,
-            [1, 2],         # indexSets — both outcome collections
-        ).build_transaction({
-            "from"    : account.address,
-            "gas"     : 500_000,
-            "gasPrice": adjusted_gas_price,
-            "nonce"   : nonce,
-            "chainId" : CHAIN_ID,
-        })
-
-        signed   = account.sign_transaction(tx)
-        raw_tx   = getattr(signed, "rawTransaction", None) or signed.raw_transaction
-        tx_hash  = w3.eth.send_raw_transaction(raw_tx)
-
-        log.info(f"    Submitted : {tx_hash.hex()}")
-        log.info(f"    Waiting for confirmation...")
-
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-
-        if receipt["status"] == 1:
-            log.info(f"    ✅ Success! Gas used: {receipt['gasUsed']}")
-            return True
-        else:
-            log.error("    ❌ Transaction reverted")
-            return False
-
-    except Exception as exc:
-        log.error(f"    ❌ On-chain error: {exc}", exc_info=True)
-        return False
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  METHOD B — RELAYER  (for Gnosis Safe / proxy wallet setups)
@@ -367,75 +306,6 @@ def redeem_via_relayer(w3: Web3, condition_id: str, size: float,
         log.error(f"    ❌ Relayer encode/sign error: {exc}", exc_info=True)
         return False
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  METHOD C — GNOSIS SAFE execTransaction  (for SIGNATURE_TYPE=2 proxy wallets)
-# ══════════════════════════════════════════════════════════════════════════════
-
-def redeem_via_safe(w3: Web3, condition_id: str, size: float, neg_risk: bool,
-                    private_key: str, eoa_address: str, proxy_wallet: str) -> bool:
-    try:
-        # 1. Redemption calldata hazırlığı
-        if neg_risk:
-            data_hex = encode_neg_risk_calldata(w3, condition_id, size)
-            to = NEG_RISK_ADDRESS
-        else:
-            data_hex = encode_redeem_calldata(w3, condition_id)
-            to = CTF_ADDRESS
-
-        data_bytes = bytes.fromhex(data_hex.removeprefix("0x"))
-        to_cs = Web3.to_checksum_address(to)
-
-        # 2. Safe kontrat instance
-        safe = w3.eth.contract(
-            address=Web3.to_checksum_address(proxy_wallet),
-            abi=SAFE_ABI,
-        )
-
-        # 3. KRİTİK DÜZELTME: Nonce hatasını aşmak için try-except
-        try:
-            safe_nonce = safe.functions.nonce().call()
-            log.info(f"    Safe nonce found: {safe_nonce}")
-        except Exception:
-            # Eğer proxy cüzdan nonce vermezse, ağdaki genel sayacı kullan
-            safe_nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(eoa_address))
-            log.warning(f"    Safe nonce failed, using EOA nonce: {safe_nonce}")
-
-        # 4. Transaction Hash (EIP-712)
-        safe_tx_hash = safe.functions.getTransactionHash(
-            to_cs, 0, data_bytes, 0, 0, 0, 0, ADDR_ZERO, ADDR_ZERO, safe_nonce
-        ).call()
-
-        # 5. İmzalama (v=31/32 Gnosis Safe kuralı)
-        signable = encode_defunct(primitive=bytes(safe_tx_hash))
-        signed = Account.from_key(private_key).sign_message(signable)
-        v = signed.v + 4
-        packed_sig = signed.r.to_bytes(32, "big") + signed.s.to_bytes(32, "big") + bytes([v])
-
-        # 6. İşlemi Gönder (EOA'dan Proxy adına)
-        gas_price = int(w3.eth.gas_price * 1.25) # Gazı %25 artırıyoruz ki takılmasın
-        
-      # auto_claim.py içinde redeem_via_safe fonksiyonunun sonundaki build_transaction:
-        tx = safe.functions.execTransaction(
-            to_cs, 0, data_bytes, 0, 0, 0, 0, ADDR_ZERO, ADDR_ZERO, packed_sig
-        ).build_transaction({
-            "from": eoa_address, # Gaz parası buradan çıksın
-            "gas": 600_000,
-            "gasPrice": int(w3.eth.gas_price * 1.3), # Hızlı onay için %30 artırıldı
-            "nonce": w3.eth.get_transaction_count(eoa_address),
-            "chainId": CHAIN_ID,
-        })
-
-        signed_tx = Account.from_key(private_key).sign_transaction(tx)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
-        log.info(f"    ✅ Submitted Auto-Claim: {tx_hash.hex()}")
-        
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-        return receipt["status"] == 1
-
-    except Exception as exc:
-        log.error(f"    ❌ Safe Auto-Claim Error: {exc}")
-        return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -905,6 +775,7 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
 
