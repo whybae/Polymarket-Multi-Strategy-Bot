@@ -7,12 +7,12 @@ from eth_account.messages import encode_defunct
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] >>> %(message)s')
 log = logging.getLogger("LabTest")
 
-# Polymarket Sabitleri
+# Sabitler
 RELAYER_URL = "https://relayer-v2.polymarket.com/submit"
 CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 
-def run_lab_test():
+def run_agressive_test():
     # 1. Değişkenleri Railway'den temizle ve al
     key = os.environ.get("POLY_BUILDER_KEY", "").strip()
     secret = os.environ.get("POLY_BUILDER_SECRET", "").strip()
@@ -20,21 +20,27 @@ def run_lab_test():
     private_key = os.environ.get("POLY_PRIVATE_KEY", "").strip()
     proxy_wallet = os.environ.get("FUNDER_ADDRESS", "").strip()
 
-    log.info("--- LABORATUVAR TESTİ: GERÇEK REDEEM DENEMESİ ---")
+    log.info("--- AGRESİF TEST: POZİSYON TARAMA VE SUBMİT ---")
 
     try:
-        # 2. Cüzdandaki bir pozisyonu otomatik bul
-        log.info(f"Cüzdan taranıyor: {proxy_wallet}")
-        r_pos = requests.get(f"https://data-api.polymarket.com/positions?user={proxy_wallet}&limit=10", timeout=10)
-        positions = [p for p in r_pos.json() if p.get("redeemable")]
+        # 2. Cüzdandaki TÜM pozisyonları bul (filtresiz)
+        r_pos = requests.get(f"https://data-api.polymarket.com/positions?user={proxy_wallet}&limit=30", timeout=10)
+        all_positions = r_pos.json()
+        
+        # Sadece miktarı 0'dan büyük olanları alalım
+        positions = [p for p in all_positions if float(p.get("size", 0)) > 0.0001]
 
         if not positions:
-            log.error("❌ Cüzdanda claim edilecek pozisyon bulunamadı!")
+            log.error(f"❌ Cüzdanda ({proxy_wallet}) hiç pozisyon bulunamadı! Lütfen adresi kontrol et.")
             return
+
+        log.info(f"Toplam {len(positions)} adet pozisyon bulundu. İlk uygun olan deneniyor...")
 
         target = positions[0]
         cid = target.get("conditionId")
-        log.info(f"Hedef Condition: {cid}")
+        title = target.get("title", "Bilinmeyen Market")
+        log.info(f"Hedef: {title}")
+        log.info(f"Condition ID: {cid}")
 
         # 3. Data Hex (Calldata) hazırlama
         w3 = Web3()
@@ -50,7 +56,7 @@ def run_lab_test():
         eoa_sig = account.sign_message(encode_defunct(primitive=msg_hash)).signature.hex()
         if not eoa_sig.startswith("0x"): eoa_sig = "0x" + eoa_sig
 
-        # 5. Builder Payload (Body) - Kesinlikle sıralı ve boşluksuz
+        # 5. Payload ve Gönderim (Ham Veri Metodu)
         payload = {
             "data": data_hex,
             "from": Web3.to_checksum_address(account.address),
@@ -62,19 +68,13 @@ def run_lab_test():
             "type": "EOA"
         }
         
-        # Bu satır body'yi Polymarket'in beklediği 'ham' hale getirir
         body_str = json.dumps(payload, separators=(',', ':'), sort_keys=True)
-
-        # 6. Builder L2 İmzası (Signature)
         timestamp = str(int(time.time()))
-        method = "POST"
-        path = "/submit"
         
-        # V2 Standart: timestamp + method + path + body
-        message = f"{timestamp}{method}{path}{body_str}"
+        # Builder V2 Signature
+        message = f"{timestamp}POST/submit{body_str}"
         sig_l2 = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
 
-        # 7. Header'lar (Testte 405 veren format)
         headers = {
             "POLY-API-KEY": key,
             "POLY-SIGNATURE": sig_l2,
@@ -84,19 +84,13 @@ def run_lab_test():
         }
 
         log.info("🚀 Relayer'a gönderiliyor...")
-        # json=payload yerine data=body_str kullanarak manipülasyonu engelliyoruz
         resp = requests.post(RELAYER_URL, data=body_str, headers=headers, timeout=20)
 
         log.info(f"YANIT KODU: {resp.status_code}")
         log.info(f"SUNUCU MESAJI: {resp.text}")
 
-        if resp.status_code in (200, 201):
-            log.info("🔥 BAŞARILI! Pozisyon claim edildi.")
-        else:
-            log.warning("Hala 401 alıyorsak varyasyon denenebilir.")
-
     except Exception as e:
         log.error(f"Hata oluştu: {e}")
 
 if __name__ == "__main__":
-    run_lab_test()
+    run_agressive_test()
