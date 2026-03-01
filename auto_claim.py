@@ -297,7 +297,7 @@ def redeem_via_relayer(w3: Web3, condition_id: str, size: float,
             proxy_wallet = proxy_wallet,
             to           = to,
             data_hex     = data_hex,
-            nonce=int(time.time()),
+            nonce=0,
             signature    = signature,
         )
         return result is not None
@@ -775,6 +775,7 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
 
