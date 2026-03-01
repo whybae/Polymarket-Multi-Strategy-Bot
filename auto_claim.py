@@ -61,8 +61,19 @@ _ROOT = Path(__file__).resolve().parent
 _CFG = dotenv_values(_ROOT / ".env")
 
 
+import os  # Eğer yukarıda import os yoksa mutlaka ekle
+
+# Load configuration from .env (shared with trading bots)
+_CFG = dotenv_values(_ROOT / ".env")
+
 def _cfg(key: str, default: str = "") -> str:
-    """Read a variable from .env."""
+    """Read a variable from Railway Variables or .env."""
+    # 1. Önce Railway'in "Variables" sekmesine (Sistem değişkenlerine) bak
+    val = os.environ.get(key)
+    if val is not None:
+        return val.strip()
+    
+    # 2. Eğer orada yoksa (bilgisayarında çalıştırıyorsan), .env dosyasına bak
     return _CFG.get(key, default).strip()
 
 
@@ -947,4 +958,5 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
