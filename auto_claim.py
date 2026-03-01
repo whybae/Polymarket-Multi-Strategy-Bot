@@ -313,12 +313,13 @@ def sign_calldata(private_key: str, data_hex: str) -> str:
 
 # ... import kısımları (üstte) ...
 
-# 1. BURAYI BUL VE DEĞİŞTİR:
-def submit_to_relayer(eoa_address, proxy_wallet, to, data_hex, nonce, signature):
-    # Railway'den Builder anahtarlarını çekiyoruz
-    api_key = os.environ.get("POLY_BUILDER_KEY", "").strip()
-    api_secret = os.environ.get("POLY_BUILDER_SECRET", "").strip()
-    api_pass = os.environ.get("POLY_BUILDER_PASSPHRASE", "").strip()
+def submit_to_relayer(eoa_address: str, proxy_wallet: str, to: str,
+                      data_hex: str, nonce: int, signature: str) -> dict | None:
+    """Builder API Anahtarları ile Polymarket Relayer-V2'ye gönderim yapar."""
+    # Railway değişkenlerinden Builder anahtarlarını çek
+    api_key = _cfg("POLY_BUILDER_KEY")
+    api_secret = _cfg("POLY_BUILDER_SECRET")
+    api_pass = _cfg("POLY_BUILDER_PASSPHRASE")
     
     timestamp = str(int(time.time()))
     method = "POST"
@@ -335,62 +336,40 @@ def submit_to_relayer(eoa_address, proxy_wallet, to, data_hex, nonce, signature)
         "type": "EOA"
     }
     
-    # İmza mesajı (Az önce 405 aldığımız çalışan format)
-    body = json.dumps(payload, separators=(',', ':'), sort_keys=True)
-    message = f"{timestamp}{method}{path}{body}"
-    
-    # HMAC-SHA256
-    sig = hmac.new(api_secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+    # 401 hatasını çözen imza formatı
+    body_str = json.dumps(payload, separators=(',', ':'), sort_keys=True)
+    message = f"{timestamp}{method}{path}{body_str}"
+    sig_l2 = hmac.new(api_secret.encode(), message.encode(), hashlib.sha256).hexdigest()
 
     headers = {
         "POLY-API-KEY": api_key,
-        "POLY-SIGNATURE": sig,
+        "POLY-SIGNATURE": sig_l2,
         "POLY-TIMESTAMP": timestamp,
         "POLY-PASSPHRASE": api_pass,
         "Content-Type": "application/json"
     }
 
-    url = "https://relayer-v2.polymarket.com/submit"
-    return requests.post(url, json=payload, headers=headers, timeout=30)
-
-# ... dosyanın geri kalanı (main kısımları vs.) ...
-    payload = {
-        "data"       : data_hex,
-        "from"       : Web3.to_checksum_address(eoa_address),
-        "metadata"   : "",
-        "nonce"      : str(nonce),
-        "proxyWallet": Web3.to_checksum_address(proxy_wallet),
-        "signature"  : signature,
-        "to"         : Web3.to_checksum_address(to),
-        "type"       : "EOA",
-    }
-
-    log.info(f"    Submitting to relayer | nonce={nonce} | type=EOA")
-    log.info(f"      to  = {to}")
-    log.info(f"      data= {data_hex[:22]}...")
-    log.info(f"      sig = {signature[:22]}...")
+    log.info(f"    🚀 Relayer-V2 isteği gönderiliyor... (nonce={nonce})")
 
     try:
-        resp = requests.post(
-            RELAYER_URL,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=30,
-        )
+        resp = requests.post(RELAYER_URL, json=payload, headers=headers, timeout=30)
+        
         if resp.status_code in (200, 201):
             result = resp.json()
-            log.info(f"    ✅ Relayer accepted!")
-            log.info(f"      txID   = {result.get('transactionID','')}")
-            log.info(f"      txHash = {result.get('transactionHash','')}")
-            log.info(f"      state  = {result.get('state','')}")
+            # Relayer'dan dönen Transaction Hash'i yakalayalım
+            tx_hash = result.get('transactionHash') or result.get('hash')
+            if tx_hash:
+                log.info(f"    ✅ İŞLEM ONAYLANDI! Hash: {tx_hash}")
+                log.info(f"    Takip et: https://polygonscan.com/tx/{tx_hash}")
+            else:
+                log.warning(f"    ⚠️ Relayer 'OK' dedi ama Hash vermedi. Yanıt: {result}")
             return result
         else:
-            log.error(f"    ❌ Relayer rejected: HTTP {resp.status_code} — {resp.text[:400]}")
+            log.error(f"    ❌ RELAYER HATASI: {resp.status_code} - {resp.text}")
             return None
     except Exception as exc:
-        log.error(f"    ❌ Relayer request failed: {exc}")
+        log.error(f"    ❌ Relayer bağlantı hatası: {exc}")
         return None
-
 
 def redeem_via_relayer(w3: Web3, condition_id: str, size: float,
                        neg_risk: bool, private_key: str,
@@ -1000,6 +979,7 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
 
