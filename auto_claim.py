@@ -7,7 +7,7 @@ Reads its configuration from .env (the same file used by the trading bots).
 Supports two redemption methods (configurable with CLAIM_METHOD in .env):
 
   relayer  → Sends meta-transactions to Polymarket's official Relayer.
-  (default)  signatureType=1 (EOA eth_sign). Independent of the SIGNATURE_TYPE
+  (default)  signatureType=0 (EOA eth_sign). Independent of the SIGNATURE_TYPE
                used by the trading bots.
 
   onchain  → Sends transactions directly on-chain from the EOA.
@@ -47,7 +47,7 @@ CONTRACTS (Polygon mainnet):
   CLAIM_METHOD            safe | relayer | onchain (default: relayer)
   CHECK_REAL_TIME         true | false (default: false)
 """
-import os
+
 import logging
 import threading
 import time
@@ -62,8 +62,8 @@ _CFG = dotenv_values(_ROOT / ".env")
 
 
 def _cfg(key: str, default: str = "") -> str:
-    """Önce Railway sistemine (os.getenv), sonra .env dosyasına bak."""
-    return os.getenv(key) or _CFG.get(key, default).strip()
+    """Read a variable from .env."""
+    return _CFG.get(key, default).strip()
 
 
 logging.basicConfig(
@@ -199,6 +199,67 @@ def is_neg_risk(position: dict) -> bool:
     return any(position.get(k, False) for k in ("negRisk", "negativeRisk", "neg_risk"))
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  METHOD A — DIRECT ON-CHAIN  (matches TypeScript reference)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def redeem_onchain(w3: Web3, condition_id: str, account) -> bool:
+    """
+    Build, sign, and broadcast redeemPositions directly on Polygon.
+    msg.sender = account.address
+
+    ⚠️  This only redeems CTF tokens held BY account.address.
+       Use CLAIM_METHOD=relayer if tokens live in a separate proxy wallet.
+    """
+    try:
+        cid_bytes = parse_condition_id(condition_id)
+
+        ctf = w3.eth.contract(
+            address=Web3.to_checksum_address(CTF_ADDRESS),
+            abi=CTF_ABI,
+        )
+
+        # Gas price + 20% buffer
+        gas_price          = w3.eth.gas_price
+        adjusted_gas_price = int(gas_price * 1.20)
+        log.info(f"    Gas price : {w3.from_wei(adjusted_gas_price, 'gwei'):.2f} Gwei")
+        log.info(f"    Condition : 0x{cid_bytes.hex()}")
+        log.info(f"    IndexSets : [1, 2]")
+
+        nonce = w3.eth.get_transaction_count(account.address)
+        tx = ctf.functions.redeemPositions(
+            Web3.to_checksum_address(USDC_ADDRESS),
+            b"\x00" * 32,   # parentCollectionId = bytes32(0)
+            cid_bytes,
+            [1, 2],         # indexSets — both outcome collections
+        ).build_transaction({
+            "from"    : account.address,
+            "gas"     : 500_000,
+            "gasPrice": adjusted_gas_price,
+            "nonce"   : nonce,
+            "chainId" : CHAIN_ID,
+        })
+
+        signed   = account.sign_transaction(tx)
+        raw_tx   = getattr(signed, "rawTransaction", None) or signed.raw_transaction
+        tx_hash  = w3.eth.send_raw_transaction(raw_tx)
+
+        log.info(f"    Submitted : {tx_hash.hex()}")
+        log.info(f"    Waiting for confirmation...")
+
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+
+        if receipt["status"] == 1:
+            log.info(f"    ✅ Success! Gas used: {receipt['gasUsed']}")
+            return True
+        else:
+            log.error("    ❌ Transaction reverted")
+            return False
+
+    except Exception as exc:
+        log.error(f"    ❌ On-chain error: {exc}", exc_info=True)
+        return False
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  METHOD B — RELAYER  (for Gnosis Safe / proxy wallet setups)
@@ -226,7 +287,7 @@ def encode_neg_risk_calldata(w3: Web3, condition_id: str, size_usdc: float) -> s
 
 def sign_calldata(private_key: str, data_hex: str) -> str:
     """
-    signatureType=1: signs keccak256(calldata) via eth_sign (personal_sign prefix).
+    signatureType=0: signs keccak256(calldata) via eth_sign (personal_sign prefix).
     "\\x19Ethereum Signed Message:\\n32" + keccak256(calldata)
     """
     data_bytes = bytes.fromhex(data_hex.removeprefix("0x"))
@@ -297,7 +358,7 @@ def redeem_via_relayer(w3: Web3, condition_id: str, size: float,
             proxy_wallet = proxy_wallet,
             to           = to,
             data_hex     = data_hex,
-            nonce=0,
+            nonce        = 0,
             signature    = signature,
         )
         return result is not None
@@ -306,6 +367,117 @@ def redeem_via_relayer(w3: Web3, condition_id: str, size: float,
         log.error(f"    ❌ Relayer encode/sign error: {exc}", exc_info=True)
         return False
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  METHOD C — GNOSIS SAFE execTransaction  (for SIGNATURE_TYPE=2 proxy wallets)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def redeem_via_safe(w3: Web3, condition_id: str, size: float, neg_risk: bool,
+                    private_key: str, eoa_address: str, proxy_wallet: str) -> bool:
+    """
+    Executes redeemPositions through the proxy wallet's Gnosis Safe contract.
+
+    Flow:
+      1. Encode CTF/NegRisk redeemPositions calldata
+      2. Call Safe.getTransactionHash(...) to obtain the EIP-712 hash
+      3. Sign the hash with the EOA (eth_sign, v=31/32 for Gnosis Safe)
+      4. Call Safe.execTransaction(...) on-chain from the EOA
+    """
+    try:
+        # 1. Redemption calldata
+        if neg_risk:
+            data_hex = encode_neg_risk_calldata(w3, condition_id, size)
+            to       = NEG_RISK_ADDRESS
+        else:
+            data_hex = encode_redeem_calldata(w3, condition_id)
+            to       = CTF_ADDRESS
+
+        data_bytes = bytes.fromhex(data_hex.removeprefix("0x"))
+        to_cs      = Web3.to_checksum_address(to)
+
+        # 2. Safe contract instance
+        safe = w3.eth.contract(
+            address=Web3.to_checksum_address(proxy_wallet),
+            abi=SAFE_ABI,
+        )
+
+        # 3. Current Safe nonce
+        safe_nonce = safe.functions.nonce().call()
+        log.info(f"    Safe nonce : {safe_nonce}")
+
+        # 4. Safe transaction hash (EIP-712 on-chain)
+        safe_tx_hash: bytes = safe.functions.getTransactionHash(
+            to_cs,          # to
+            0,              # value
+            data_bytes,     # data
+            0,              # operation  (0 = CALL)
+            0,              # safeTxGas
+            0,              # baseGas
+            0,              # gasPrice
+            ADDR_ZERO,      # gasToken
+            ADDR_ZERO,      # refundReceiver
+            safe_nonce,     # _nonce
+        ).call()
+
+        log.info(f"    Safe tx hash: 0x{bytes(safe_tx_hash).hex()}")
+
+        # 5. eth_sign over the Safe tx hash
+        #    Gnosis Safe accepts v=31/32 for eth_sign (v_raw + 4)
+        signable = encode_defunct(primitive=bytes(safe_tx_hash))
+        signed   = Account.from_key(private_key).sign_message(signable)
+        v        = signed.v + 4   # 27→31 or 28→32 (eth_sign type for Gnosis Safe)
+        packed_sig = (
+            signed.r.to_bytes(32, "big") +
+            signed.s.to_bytes(32, "big") +
+            bytes([v])
+        )
+        log.info(f"    Signature  : 0x{packed_sig.hex()[:22]}... (v={v})")
+
+        # 6. Send execTransaction from the EOA
+        gas_price          = w3.eth.gas_price
+        adjusted_gas_price = int(gas_price * 1.20)
+        log.info(f"    Gas price  : {w3.from_wei(adjusted_gas_price, 'gwei'):.2f} Gwei")
+
+        nonce = w3.eth.get_transaction_count(eoa_address)
+        tx = safe.functions.execTransaction(
+            to_cs,          # to
+            0,              # value
+            data_bytes,     # data
+            0,              # operation
+            0,              # safeTxGas
+            0,              # baseGas
+            0,              # gasPrice
+            ADDR_ZERO,      # gasToken
+            ADDR_ZERO,      # refundReceiver
+            packed_sig,     # signatures
+        ).build_transaction({
+            "from"    : eoa_address,
+            "gas"     : 500_000,
+            "gasPrice": adjusted_gas_price,
+            "nonce"   : nonce,
+            "chainId" : CHAIN_ID,
+        })
+
+        account    = Account.from_key(private_key)
+        signed_tx  = account.sign_transaction(tx)
+        raw_tx     = getattr(signed_tx, "rawTransaction", None) or signed_tx.raw_transaction
+        tx_hash    = w3.eth.send_raw_transaction(raw_tx)
+
+        log.info(f"    Submitted : {tx_hash.hex()}")
+        log.info(f"    Waiting for confirmation...")
+
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+
+        if receipt["status"] == 1:
+            log.info(f"    ✅ Success! Gas used: {receipt['gasUsed']}")
+            return True
+        else:
+            log.error("    ❌ execTransaction reverted")
+            return False
+
+    except Exception as exc:
+        log.error(f"    ❌ Safe execution error: {exc}", exc_info=True)
+        return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -340,10 +512,10 @@ def get_redeemable_positions(wallet: str) -> tuple[list, list]:
     all_positions = fetch_all_positions(wallet)
 
     redeemable = [
-    p for p in all_positions  # 'positions' yerine 'all_positions' yazdık
-    if (float(p.get("curPrice", 0.5)) >= 0.98)
-    and p.get("redeemable") is True
-    and float(p.get("currentValue", 0)) > 0.1
+        p for p in all_positions
+        if (float(p.get("curPrice", 0.5)) >= RESOLVED_HIGH or
+            float(p.get("curPrice", 0.5)) <= RESOLVED_LOW)
+        and p.get("redeemable") is True
     ]
 
     active = [
@@ -727,15 +899,15 @@ def run():
     except Exception as exc:
         log.error(f"Invalid POLY_PRIVATE_KEY: {exc}"); return
 
-   #  if use_onchain and eoa_address.lower() != proxy_wallet.lower():
-   #    log.warning(f"⚠️  CLAIM_METHOD=onchain but EOA ({eoa_address}) != proxy wallet ({proxy_wallet})")
-   #    log.warning("⚠️  onchain redeems FROM the EOA address, not from the proxy wallet.")
+    if use_onchain and eoa_address.lower() != proxy_wallet.lower():
+        log.warning(f"⚠️  CLAIM_METHOD=onchain but EOA ({eoa_address}) != proxy wallet ({proxy_wallet})")
+        log.warning("⚠️  onchain redeems FROM the EOA address, not from the proxy wallet.")
         log.warning("⚠️  If tokens are in the proxy wallet, use CLAIM_METHOD=safe in .env")
 
     method_label = {
         "safe"   : "GNOSIS SAFE (execTransaction)",
         "onchain": "ON-CHAIN (direct tx)",
-        "relayer": "RELAYER (signatureType=1)",
+        "relayer": "RELAYER (signatureType=0)",
     }.get(CLAIM_METHOD, CLAIM_METHOD)
 
     mode_label = (
@@ -775,19 +947,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
