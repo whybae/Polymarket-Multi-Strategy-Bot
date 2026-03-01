@@ -415,12 +415,13 @@ def redeem_via_safe(w3: Web3, condition_id: str, size: float, neg_risk: bool,
         # 6. İşlemi Gönder (EOA'dan Proxy adına)
         gas_price = int(w3.eth.gas_price * 1.25) # Gazı %25 artırıyoruz ki takılmasın
         
+      # auto_claim.py içinde redeem_via_safe fonksiyonunun sonundaki build_transaction:
         tx = safe.functions.execTransaction(
             to_cs, 0, data_bytes, 0, 0, 0, 0, ADDR_ZERO, ADDR_ZERO, packed_sig
         ).build_transaction({
-            "from": eoa_address,
+            "from": eoa_address, # Gaz parası buradan çıksın
             "gas": 600_000,
-            "gasPrice": gas_price,
+            "gasPrice": int(w3.eth.gas_price * 1.3), # Hızlı onay için %30 artırıldı
             "nonce": w3.eth.get_transaction_count(eoa_address),
             "chainId": CHAIN_ID,
         })
@@ -904,6 +905,7 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
 
