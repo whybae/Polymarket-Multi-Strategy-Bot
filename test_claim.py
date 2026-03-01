@@ -3,55 +3,54 @@ from web3 import Web3
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+# Loglama ayarları
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] >>> %(message)s')
 log = logging.getLogger("LabTest")
 
-# Sabitler (Polymarket V2)
+# Polymarket Sabitleri
 RELAYER_URL = "https://relayer-v2.polymarket.com/submit"
 CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
 
-def run_submit_test():
-    # 1. Değişkenleri Railway'den al
+def run_lab_test():
+    # 1. Değişkenleri Railway'den temizle ve al
     key = os.environ.get("POLY_BUILDER_KEY", "").strip()
     secret = os.environ.get("POLY_BUILDER_SECRET", "").strip()
     passphrase = os.environ.get("POLY_BUILDER_PASSPHRASE", "").strip()
-    eoa_pk = os.environ.get("POLY_PRIVATE_KEY", "").strip()
+    private_key = os.environ.get("POLY_PRIVATE_KEY", "").strip()
     proxy_wallet = os.environ.get("FUNDER_ADDRESS", "").strip()
 
-    # 2. Örnek bir Condition ID (Cüzdanındaki o bekleyenlerden birini alalım)
-    # Eğer cüzdanında bekleyen varsa kod bunu otomatik bulmaya çalışacak
-    log.info("--- GERÇEK SUBMİT PROVASI BAŞLADI ---")
-    
+    log.info("--- LABORATUVAR TESTİ: GERÇEK REDEEM DENEMESİ ---")
+
     try:
-        # Cüzdanındaki pozisyonları tara
-        r_pos = requests.get(f"https://data-api.polymarket.com/positions?user={proxy_wallet}&limit=5", timeout=10)
+        # 2. Cüzdandaki bir pozisyonu otomatik bul
+        log.info(f"Cüzdan taranıyor: {proxy_wallet}")
+        r_pos = requests.get(f"https://data-api.polymarket.com/positions?user={proxy_wallet}&limit=10", timeout=10)
         positions = [p for p in r_pos.json() if p.get("redeemable")]
-        
+
         if not positions:
-            log.error("❌ HATA: Cüzdanında şu an claim edilecek pozisyon yok!")
+            log.error("❌ Cüzdanda claim edilecek pozisyon bulunamadı!")
             return
 
-        target_pos = positions[0]
-        cid = target_pos.get("conditionId")
+        target = positions[0]
+        cid = target.get("conditionId")
         log.info(f"Hedef Condition: {cid}")
 
-        # 3. Data Hex Oluştur (RedeemPositions Calldata)
-        # Basit bir ABI ile kodlama
+        # 3. Data Hex (Calldata) hazırlama
         w3 = Web3()
-        ctf_contract = w3.eth.contract(address=Web3.to_checksum_address(CTF_ADDRESS), abi=[{"name":"redeemPositions","type":"function","inputs":[{"name":"collateralToken","type":"address"},{"name":"parentCollectionId","type":"bytes32"},{"name":"conditionId","type":"bytes32"},{"name":"indexSets","type":"uint256[]"}],"outputs":[],"stateMutability":"nonpayable"}])
+        abi = [{"name":"redeemPositions","type":"function","inputs":[{"name":"collateralToken","type":"address"},{"name":"parentCollectionId","type":"bytes32"},{"name":"conditionId","type":"bytes32"},{"name":"indexSets","type":"uint256[]"}],"outputs":[],"stateMutability":"nonpayable"}]
+        contract = w3.eth.contract(address=Web3.to_checksum_address(CTF_ADDRESS), abi=abi)
         
         cid_bytes = bytes.fromhex(cid[2:].zfill(64))
-        data_hex = ctf_contract.encode_abi("redeemPositions", args=[Web3.to_checksum_address(USDC_ADDRESS), b"\x00" * 32, cid_bytes, [1, 2]])
+        data_hex = contract.encode_abi("redeemPositions", args=[Web3.to_checksum_address(USDC_ADDRESS), b"\x00" * 32, cid_bytes, [1, 2]])
 
-        # 4. EOA İmzası (Cüzdanın işlemi onaylaması)
+        # 4. EOA (Cüzdan Sahibi) İmzası
+        account = Account.from_key(private_key)
         msg_hash = Web3.keccak(bytes.fromhex(data_hex.removeprefix("0x")))
-        account = Account.from_key(eoa_pk)
         eoa_sig = account.sign_message(encode_defunct(primitive=msg_hash)).signature.hex()
         if not eoa_sig.startswith("0x"): eoa_sig = "0x" + eoa_sig
 
-        # 5. Builder Payload ve L2 İmzası
-        timestamp = str(int(time.time()))
+        # 5. Builder Payload (Body) - Kesinlikle sıralı ve boşluksuz
         payload = {
             "data": data_hex,
             "from": Web3.to_checksum_address(account.address),
@@ -63,11 +62,19 @@ def run_submit_test():
             "type": "EOA"
         }
         
-        # Kesinlikle boşluksuz ham metin
+        # Bu satır body'yi Polymarket'in beklediği 'ham' hale getirir
         body_str = json.dumps(payload, separators=(',', ':'), sort_keys=True)
-        message = f"{timestamp}POST/submit{body_str}"
+
+        # 6. Builder L2 İmzası (Signature)
+        timestamp = str(int(time.time()))
+        method = "POST"
+        path = "/submit"
+        
+        # V2 Standart: timestamp + method + path + body
+        message = f"{timestamp}{method}{path}{body_str}"
         sig_l2 = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
 
+        # 7. Header'lar (Testte 405 veren format)
         headers = {
             "POLY-API-KEY": key,
             "POLY-SIGNATURE": sig_l2,
@@ -76,19 +83,20 @@ def run_submit_test():
             "Content-Type": "application/json"
         }
 
-        log.info("🚀 Relayer'a gerçek veri gönderiliyor...")
-        resp = requests.post(RELAYER_URL, data=body_str, headers=headers, timeout=15)
-        
+        log.info("🚀 Relayer'a gönderiliyor...")
+        # json=payload yerine data=body_str kullanarak manipülasyonu engelliyoruz
+        resp = requests.post(RELAYER_URL, data=body_str, headers=headers, timeout=20)
+
         log.info(f"YANIT KODU: {resp.status_code}")
-        log.info(f"YANIT: {resp.text}")
+        log.info(f"SUNUCU MESAJI: {resp.text}")
 
         if resp.status_code in (200, 201):
-            log.info("🔥 BAŞARDIK! İşlem Relayer tarafından kabul edildi.")
+            log.info("🔥 BAŞARILI! Pozisyon claim edildi.")
         else:
-            log.error("⚠️ Hala bir sorun var. Yukarıdaki hata mesajını incele.")
+            log.warning("Hala 401 alıyorsak varyasyon denenebilir.")
 
     except Exception as e:
-        log.error(f"HATA: {e}")
+        log.error(f"Hata oluştu: {e}")
 
 if __name__ == "__main__":
-    run_submit_test()
+    run_lab_test()
