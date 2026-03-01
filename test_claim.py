@@ -36,8 +36,10 @@ def run_diagnostic():
 
     log.info(f"✅ Tüm anahtarlar yüklendi. Adres: {keys['ADDR'][:10]}...")
     
-    # VARYASYON: Sadece Timestamp + Body (Yalın İmza)
+    # VARYASYON: Polymarket V2 - Tam Dökümantasyon Uyumu
     timestamp = str(int(time.time()))
+    method = "POST"
+    path = "/submit" 
     
     payload = {
         "data": "0x",
@@ -50,15 +52,17 @@ def run_diagnostic():
         "type": "EOA"
     }
     
-    # Body: Boşluksuz ve alfabetik (sort_keys=True çok kritik)
+    # JSON body: Boşluksuz ve alfabe sırasına göre (Strict JSON)
     body = json.dumps(payload, separators=(',', ':'), sort_keys=True)
     
-    # YALIN MESAJ: Method ve Path olmadan dene
-    message = f"{timestamp}{body}"
+    # MESAJ: timestamp + method + path + body (Arada boşluk yok!)
+    message = f"{timestamp}{method}{path}{body}"
     
+    # HMAC-SHA256 (Secret anahtarın ile imzala)
     sig = hmac.new(keys['SECRET'].encode(), message.encode(), hashlib.sha256).hexdigest()
 
-    # Header'ları Polymarket standart L2 Auth formatına çekelim
+    # HEADER'LAR: Bazı sunucular tire (-) yerine alt çizgi (_) kabul etmez.
+    # Bu sefer en standart halini deniyoruz:
     headers = {
         "POLY-API-KEY": keys['KEY'],
         "POLY-SIGNATURE": sig,
