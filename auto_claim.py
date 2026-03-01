@@ -857,8 +857,8 @@ def run():
     except Exception as exc:
         log.error(f"Invalid POLY_PRIVATE_KEY: {exc}"); return
 
-  #  if use_onchain and eoa_address.lower() != proxy_wallet.lower():
-        log.warning(f"⚠️  CLAIM_METHOD=onchain but EOA ({eoa_address}) != proxy wallet ({proxy_wallet})")
+   #  if use_onchain and eoa_address.lower() != proxy_wallet.lower():
+   #    log.warning(f"⚠️  CLAIM_METHOD=onchain but EOA ({eoa_address}) != proxy wallet ({proxy_wallet})")
         log.warning("⚠️  onchain redeems FROM the EOA address, not from the proxy wallet.")
         log.warning("⚠️  If tokens are in the proxy wallet, use CLAIM_METHOD=safe in .env")
 
@@ -905,6 +905,7 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
 
