@@ -1,87 +1,44 @@
-import hmac, hashlib, time, requests, json, os, logging
-from web3 import Web3
+import time, requests, json, os, hmac, hashlib, logging
 
-# Loglama Ayarları - Daha görünür yapalım
-logging.basicConfig(
-    level=logging.INFO, 
-    format='[%(asctime)s][%(levelname)s] >>> %(message)s'
-)
-log = logging.getLogger("TerminalTest")
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] >>> %(message)s')
+log = logging.getLogger("SimpleTest")
 
-def _cfg(key: str) -> str:
-    # Railway Variables'tan çekmeye zorla
-    val = os.environ.get(key, "").strip()
-    return val
+def run_final_test():
+    # Railway'den temiz verileri al
+    key = os.environ.get("POLY_BUILDER_KEY", "").strip()
+    secret = os.environ.get("POLY_BUILDER_SECRET", "").strip()
+    passphrase = os.environ.get("POLY_BUILDER_PASSPHRASE", "").strip()
 
-def run_diagnostic():
-    log.info("=========================================")
-    log.info("   POLYMARKET BUILDER V2 TEST ÜNİTESİ    ")
-    log.info("=========================================")
+    log.info("=== BASİTLEŞTİRİLMİŞ BUILDER TESTİ ===")
     
-    # Değişkenleri kontrol et
-    keys = {
-        "KEY": _cfg("POLY_BUILDER_KEY"),
-        "SECRET": _cfg("POLY_BUILDER_SECRET"),
-        "PASS": _cfg("POLY_BUILDER_PASSPHRASE"),
-        "ADDR": _cfg("POLY_ADDRESS"),
-        "PROXY": _cfg("FUNDER_ADDRESS")
-    }
-
-    # Hangisi eksikse tek tek söyle
-    missing = [k for k, v in keys.items() if not v]
-    if missing:
-        log.error(f"❌ EKSİK DEĞİŞKENLER: {', '.join(missing)}")
-        log.error("Lütfen Railway > Variables kısmını kontrol et.")
-        return
-
-    log.info(f"✅ Tüm anahtarlar yüklendi. Adres: {keys['ADDR'][:10]}...")
-    # VARYASYON: Strict Case and Path Inclusion
     timestamp = str(int(time.time()))
-    method = "POST"
-    path = "/submit"
+    # Bu sefer '/submit' yerine direkt ana URL'yi veya profil uç noktasını hedefleyelim
+    # Bazı Builder API'leri sadece GET isteğiyle bile doğrulanabilir
     
-    payload = {
-        "data": "0x",
-        "from": keys['ADDR'],
-        "metadata": "",
-        "nonce": "0",
-        "proxyWallet": keys['PROXY'],
-        "signature": "0x",
-        "to": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
-        "type": "EOA"
-    }
+    method = "GET"
+    path = "/orders" # Bu uç nokta Builder yetkisi gerektirir ama body istemez
     
-    # Body'yi bir değişkene alıp hem imzada hem de istekte AYNI stringi kullanmak çok kritiktir
-    body_str = json.dumps(payload, separators=(',', ':'), sort_keys=True)
-    
-    # MESAJ: En standart V2 dizilimi
-    message = f"{timestamp}{method}{path}{body_str}"
-    
-    sig = hmac.new(keys['SECRET'].encode(), message.encode(), hashlib.sha256).hexdigest()
+    # İmzalanacak mesaj (Body boş olduğu için sadece timestamp+method+path)
+    message = f"{timestamp}{method}{path}"
+    sig = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
 
-    # Bazı sunucular tire yerine alt çizgi (_) ister, Polymarket V2 genelde TİRE (-) ister.
-    # Bu sefer BUILDER takısını tekrar ekliyoruz çünkü dökümanda öyle geçer.
     headers = {
-        "POLY_BUILDER_API_KEY": keys['KEY'],
-        "POLY_BUILDER_SIGNATURE": sig,
-        "POLY_BUILDER_TIMESTAMP": timestamp,
-        "POLY_BUILDER_PASSPHRASE": keys['PASS'],
+        "POLY-API-KEY": key,
+        "POLY-SIGNATURE": sig,
+        "POLY-TIMESTAMP": timestamp,
+        "POLY-PASSPHRASE": passphrase,
         "Content-Type": "application/json"
     }
 
-    log.info("🚀 Polymarket sunucusuna bağlanılıyor...")
     try:
-        r = requests.post("https://relayer-v2.polymarket.com/submit", json=payload, headers=headers, timeout=10)
-        log.info(f"📡 SUNUCU YANITI: {r.status_code}")
-        log.info(f"📄 MESAJ: {r.text}")
-        
-        if r.status_code == 400:
-            log.info("🎯 TEBRİKLER! Sunucu seni tanıdı (Yetki Tamam). Sadece gönderdiğin veri (0x) boş olduğu için 400 verdi.")
+        url = "https://clob.polymarket.com/orders" # Farklı bir endpoint deniyoruz
+        log.info(f"Bağlanılıyor: {url}")
+        r = requests.get(url, headers=headers, timeout=10)
+        log.info(f"YANIT KODU: {r.status_code}")
+        log.info(f"MESAJ: {r.text}")
     except Exception as e:
-        log.error(f"💥 BAĞLANTI HATASI: {e}")
+        log.error(f"HATA: {e}")
 
 if __name__ == "__main__":
-    run_diagnostic()
-    log.info("=========================================")
-    log.info("Test bitti. Logları görmen için 2 dakika bekliyorum...")
-    time.sleep(120) # 2 dakika boyunca konteynerı açık tutar
+    run_final_test()
+    time.sleep(60)
