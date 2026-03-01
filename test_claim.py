@@ -35,11 +35,8 @@ def run_diagnostic():
         return
 
     log.info(f"✅ Tüm anahtarlar yüklendi. Adres: {keys['ADDR'][:10]}...")
-    
-    # VARYASYON: Polymarket V2 - Tam Dökümantasyon Uyumu
+    # VARYASYON: Sadece Timestamp ve Body (Method/Path olmadan)
     timestamp = str(int(time.time()))
-    method = "POST"
-    path = "/submit" 
     
     payload = {
         "data": "0x",
@@ -52,17 +49,16 @@ def run_diagnostic():
         "type": "EOA"
     }
     
-    # JSON body: Boşluksuz ve alfabe sırasına göre (Strict JSON)
+    # Body: Boşluksuz ve anahtarlar alfabetik (Strict JSON)
     body = json.dumps(payload, separators=(',', ':'), sort_keys=True)
     
-    # MESAJ: timestamp + method + path + body (Arada boşluk yok!)
-    message = f"{timestamp}{body}"    
+    # Çoğu başarılı Builder implementasyonu sadece bunu kullanır:
+    message = f"{timestamp}{body}"
     
-    # HMAC-SHA256 (Secret anahtarın ile imzala)
     sig = hmac.new(keys['SECRET'].encode(), message.encode(), hashlib.sha256).hexdigest()
 
-    # HEADER'LAR: Bazı sunucular tire (-) yerine alt çizgi (_) kabul etmez.
-    # Bu sefer en standart halini deniyoruz:
+    # Bazı sunucular POLY-API-KEY yerine POLY-BUILDER-API-KEY bekler.
+    # Bu sefer header isimlerini Polymarket'in "L2 Signature" dökümanındaki gibi yapıyoruz:
     headers = {
         "POLY-API-KEY": keys['KEY'],
         "POLY-SIGNATURE": sig,
