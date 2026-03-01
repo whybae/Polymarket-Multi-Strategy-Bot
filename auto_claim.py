@@ -52,6 +52,9 @@ import logging
 import threading
 import time
 import requests
+import json      # <--- EKSİK OLAN BUYDU
+import hmac      # <--- EKSİK OLAN BUYDU
+import hashlib   # <--- EKSİK OLAN BUYDU
 from pathlib import Path
 from dotenv import dotenv_values
 
@@ -997,6 +1000,7 @@ def run():
 
 if __name__ == "__main__":
     run()
+
 
 
 
